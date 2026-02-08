@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "djust-errors-client"
+version = "0.1.0"
+description = "Error tracking client for djust applications"
+requires-python = ">=3.10"
+dependencies = [
+    "requests",
+    "django>=4.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-django",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/djust_errors_client"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
