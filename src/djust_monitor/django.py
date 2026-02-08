@@ -1,9 +1,15 @@
+import json
+import logging
 import socket
+import threading
 import time
 
-from django.apps import AppConfig
+import requests as _requests
 from django.conf import settings
+from django.http import JsonResponse
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 def _setting(new_name, old_name, default=None):
@@ -14,33 +20,101 @@ def _setting(new_name, old_name, default=None):
     return getattr(settings, old_name, default)
 
 
-class DjustMonitorConfig(AppConfig):
-    name = "djust_monitor"
-    verbose_name = "Djust Monitor"
-    default_auto_field = "django.db.models.BigAutoField"
+def _build_dsn(raw_dsn):
+    """Build a full DSN URL from a raw DSN value.
 
-    def ready(self):
-        dsn = _setting("DJUST_MONITOR_DSN", "DJUST_ERRORS_DSN")
-        if dsn:
-            import djust_monitor
+    Accepts either:
+      - Full URL:  "http://API_KEY@host:port/api/reports/"
+      - Plain key: "API_KEY"  (requires DJUST_MONITOR_HOST setting)
 
-            kwargs = {}
-            env = _setting("DJUST_MONITOR_ENVIRONMENT", "DJUST_ERRORS_ENVIRONMENT")
-            if env:
-                kwargs["environment"] = env
-            release = _setting("DJUST_MONITOR_RELEASE", "DJUST_ERRORS_RELEASE")
-            if release:
-                kwargs["release"] = release
-            sample_rate = _setting("DJUST_MONITOR_SAMPLE_RATE", "DJUST_ERRORS_SAMPLE_RATE")
-            if sample_rate is not None:
-                kwargs["sample_rate"] = sample_rate
-            djust_monitor.init(dsn, **kwargs)
+    When a plain key is given, DJUST_MONITOR_HOST (default "http://localhost:8085")
+    is used to construct the full DSN.
+    """
+    if "://" in raw_dsn:
+        return raw_dsn
+
+    # Plain API key — build URL from host setting
+    host = _setting("DJUST_MONITOR_HOST", "DJUST_ERRORS_HOST", "http://localhost:8085")
+    host = host.rstrip("/")
+    return f"{host.replace('://', f'://{raw_dsn}@')}/api/reports/"
 
 
-# Keep old name as alias for backwards compatibility
-DjustErrorsConfig = DjustMonitorConfig
+def _on_full_html_update(sender, **kwargs):
+    """Handle djust's full_html_update signal — forward to monitor as an event."""
+    import djust_monitor
 
-_DEFAULT_IGNORE_PATHS = ["/static/", "/favicon.ico"]
+    reason = kwargs.get("reason", "unknown")
+    event_name = kwargs.get("event_name", "unknown")
+    view_name = kwargs.get("view_name", "unknown")
+    html_size = kwargs.get("html_size", 0)
+    previous_html_size = kwargs.get("previous_html_size")
+    patch_count = kwargs.get("patch_count")
+    version = kwargs.get("version", 0)
+
+    # Build size delta string
+    if previous_html_size is not None:
+        delta = html_size - previous_html_size
+        sign = "+" if delta >= 0 else ""
+        size_info = f"{previous_html_size:,}B → {html_size:,}B ({sign}{delta:,}B)"
+    else:
+        size_info = f"{html_size:,}B"
+
+    reasons = {
+        "first_render": (
+            "First render (mount) — no previous VDOM exists to diff against. "
+            "This is normal and expected for the initial page load."
+        ),
+        "no_patches": (
+            "The Rust VDOM engine diffed the previous and current render but "
+            "produced no patches. This means the template structure changed "
+            "significantly (e.g. {% if %} blocks toggling large sections, "
+            "{% for %} loops changing length, or dynamic template switching)."
+        ),
+        "component_event": (
+            "Component events use a separate VDOM from the parent view. "
+            "Per-component VDOM tracking is not yet implemented, so the "
+            "full parent HTML is sent instead of patches."
+        ),
+        "embedded_child": (
+            "Embedded child views always receive full HTML because they "
+            "render independently from the parent's VDOM tree."
+        ),
+        "patch_compression": (
+            f"The VDOM engine generated {patch_count} patches, but the full "
+            f"HTML was >30% smaller than the patch payload. "
+            "Sending HTML instead for better network performance."
+        ),
+        "no_change": (
+            "The VDOM engine diffed the previous and current render and found "
+            "zero differences. The event handler likely modified state that is "
+            "outside the <div data-djust-root> boundary. Consider using "
+            "push_event for client-side-only state changes."
+        ),
+    }
+    explanation = reasons.get(reason, f"Unknown reason: {reason}")
+
+    message = (
+        f"Full HTML update on {view_name} (event: {event_name}, "
+        f"v{version}, {size_info}). {explanation}"
+    )
+
+    djust_monitor.capture_event(
+        "FullHTMLUpdate",
+        message,
+        context={
+            "view_name": view_name,
+            "event_name": event_name,
+            "reason": reason,
+            "html_size": html_size,
+            "previous_html_size": previous_html_size,
+            "patch_count": patch_count,
+            "vdom_version": version,
+        },
+    )
+
+
+_PROXY_PATH = "/_djust_monitor/reports/"
+_DEFAULT_IGNORE_PATHS = ["/static/", "/favicon.ico", "/_djust_monitor/"]
 
 
 class DjustMonitorMiddleware:
@@ -61,10 +135,22 @@ class DjustMonitorMiddleware:
         self._js_capture = _setting(
             "DJUST_MONITOR_JS_CAPTURE", "DJUST_ERRORS_JS_CAPTURE", True
         )
-        self._dsn = _setting("DJUST_MONITOR_DSN", "DJUST_ERRORS_DSN", "")
+        raw_dsn = _setting("DJUST_MONITOR_DSN", "DJUST_ERRORS_DSN", "")
+        self._dsn = _build_dsn(raw_dsn) if raw_dsn else ""
         self._environment = _setting(
             "DJUST_MONITOR_ENVIRONMENT", "DJUST_ERRORS_ENVIRONMENT", "production"
         )
+
+        # Same-origin proxy: parse DSN into endpoint + API key for forwarding
+        self._proxy_endpoint = ""
+        self._proxy_api_key = ""
+        if self._dsn:
+            from .transport import parse_dsn
+
+            try:
+                self._proxy_endpoint, self._proxy_api_key = parse_dsn(self._dsn)
+            except ValueError:
+                logger.warning("djust-monitor: invalid DSN, JS proxy disabled")
 
         # Cache all capture flags once at init — no per-request settings lookups
         cfg = _setting(
@@ -95,6 +181,10 @@ class DjustMonitorMiddleware:
             self._resolve = _resolve
 
     def __call__(self, request):
+        # Same-origin proxy for JS error reports — intercept before normal processing
+        if request.path == _PROXY_PATH and request.method == "POST":
+            return self._proxy_report(request)
+
         if not self.metrics_enabled or self._should_ignore(request.path):
             return self.get_response(request)
 
@@ -202,6 +292,41 @@ class DjustMonitorMiddleware:
                     response["Content-Length"] = len(response.content)
 
         return response
+
+    def _proxy_report(self, request):
+        """Forward a JS error report to the monitor server (same-origin proxy).
+
+        CSRF exempt by design: this endpoint receives fire-and-forget XHR POSTs
+        from the injected JS capture script. No cookies or sessions are used —
+        authentication is added server-side via the configured API key.
+        """
+        if not self._proxy_endpoint:
+            return JsonResponse({"error": "Monitor not configured"}, status=503)
+
+        try:
+            body = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+        endpoint = self._proxy_endpoint
+        api_key = self._proxy_api_key
+
+        def _forward():
+            try:
+                _requests.post(
+                    endpoint,
+                    json=body,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=5.0,
+                )
+            except Exception:
+                logger.debug("djust-monitor: proxy forward failed", exc_info=True)
+
+        threading.Thread(target=_forward, daemon=True).start()
+        return JsonResponse({"status": "accepted"}, status=202)
 
     def _should_ignore(self, path):
         return any(path.startswith(prefix) for prefix in self.ignore_paths)
