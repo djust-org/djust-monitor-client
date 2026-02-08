@@ -65,6 +65,33 @@ class DjustErrorsClient:
         self.transport.send(payload)
         return fingerprint
 
+    def capture_event(
+        self,
+        event_type: str,
+        message: str,
+        context: dict | None = None,
+        source: str = "python",
+    ) -> str | None:
+        """Send a non-exception event report (e.g. FullHTMLUpdate, performance warning)."""
+        if self.sample_rate < 1.0 and random.random() > self.sample_rate:
+            return None
+
+        payload = {
+            "source": source,
+            "environment": self.environment,
+            "release": self.release,
+            "exception": {
+                "type": event_type,
+                "message": message,
+                "frames": [],
+            },
+            "context": context or {},
+        }
+        fingerprint = compute_fingerprint(payload)
+        payload["fingerprint"] = fingerprint
+        self.transport.send(payload)
+        return fingerprint
+
     def record_metric(self, metric: dict) -> None:
         """Buffer a request metric. Flushes when batch size is reached."""
         metric.setdefault("environment", self.environment)
