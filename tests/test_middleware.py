@@ -13,18 +13,18 @@ if not settings.configured:
     )
     django.setup()
 
-import djust_errors_client
-from djust_errors_client.django import (
-    DjustErrorsConfig,
-    DjustErrorsMiddleware,
+import djust_monitor
+from djust_monitor.django import (
+    DjustMonitorConfig,
+    DjustMonitorMiddleware,
     _build_request_context,
 )
 
 
-class TestDjustErrorsMiddleware:
+class TestDjustMonitorMiddleware:
     def test_calls_next_middleware(self):
         get_response = MagicMock(return_value="response")
-        middleware = DjustErrorsMiddleware(get_response)
+        middleware = DjustMonitorMiddleware(get_response)
         request = MagicMock()
 
         result = middleware(request)
@@ -32,9 +32,9 @@ class TestDjustErrorsMiddleware:
         get_response.assert_called_once_with(request)
         assert result == "response"
 
-    @patch("djust_errors_client.capture_exception")
+    @patch("djust_monitor.capture_exception")
     def test_process_exception_captures(self, mock_capture):
-        middleware = DjustErrorsMiddleware(lambda r: None)
+        middleware = DjustMonitorMiddleware(lambda r: None)
         request = MagicMock()
         request.method = "GET"
         request.build_absolute_uri.return_value = "https://example.com/test/"
@@ -54,9 +54,9 @@ class TestDjustErrorsMiddleware:
         assert ctx["method"] == "GET"
         assert ctx["url"] == "https://example.com/test/"
 
-    @patch("djust_errors_client.capture_exception")
+    @patch("djust_monitor.capture_exception")
     def test_process_exception_returns_none(self, mock_capture):
-        middleware = DjustErrorsMiddleware(lambda r: None)
+        middleware = DjustMonitorMiddleware(lambda r: None)
         request = MagicMock()
         request.method = "POST"
         request.build_absolute_uri.return_value = "https://example.com/"
@@ -101,33 +101,44 @@ class TestBuildRequestContext:
 
 
 class TestAppConfigReady:
-    @patch("djust_errors_client.init")
+    @patch("djust_monitor.init")
     def test_init_called_with_dsn(self, mock_init):
-        with self.settings(DJUST_ERRORS_DSN="https://key@host/ingest"):
-            config = DjustErrorsConfig("djust_errors_client", djust_errors_client)
+        with self.settings(DJUST_MONITOR_DSN="https://key@host/ingest"):
+            config = DjustMonitorConfig("djust_monitor", djust_monitor)
             config.ready()
 
         mock_init.assert_called_once()
         args, kwargs = mock_init.call_args
         assert args[0] == "https://key@host/ingest"
 
-    @patch("djust_errors_client.init")
+    @patch("djust_monitor.init")
+    def test_init_called_with_legacy_dsn(self, mock_init):
+        """Backwards compatibility: old DJUST_ERRORS_DSN still works."""
+        with self.settings(DJUST_ERRORS_DSN="https://key@host/ingest"):
+            config = DjustMonitorConfig("djust_monitor", djust_monitor)
+            config.ready()
+
+        mock_init.assert_called_once()
+        args, kwargs = mock_init.call_args
+        assert args[0] == "https://key@host/ingest"
+
+    @patch("djust_monitor.init")
     def test_no_dsn_skips_init(self, mock_init):
-        with self.settings(DJUST_ERRORS_DSN=None):
-            config = DjustErrorsConfig("djust_errors_client", djust_errors_client)
+        with self.settings(DJUST_MONITOR_DSN=None):
+            config = DjustMonitorConfig("djust_monitor", djust_monitor)
             config.ready()
 
         mock_init.assert_not_called()
 
-    @patch("djust_errors_client.init")
+    @patch("djust_monitor.init")
     def test_passes_optional_settings(self, mock_init):
         with self.settings(
-            DJUST_ERRORS_DSN="https://key@host/ingest",
-            DJUST_ERRORS_ENVIRONMENT="staging",
-            DJUST_ERRORS_RELEASE="2.0.0",
-            DJUST_ERRORS_SAMPLE_RATE=0.5,
+            DJUST_MONITOR_DSN="https://key@host/ingest",
+            DJUST_MONITOR_ENVIRONMENT="staging",
+            DJUST_MONITOR_RELEASE="2.0.0",
+            DJUST_MONITOR_SAMPLE_RATE=0.5,
         ):
-            config = DjustErrorsConfig("djust_errors_client", djust_errors_client)
+            config = DjustMonitorConfig("djust_monitor", djust_monitor)
             config.ready()
 
         _, kwargs = mock_init.call_args
@@ -152,16 +163,16 @@ class TestJsCaptureInjection:
 
     def _make_middleware(self, **setting_overrides):
         from django.test.utils import override_settings
-        defaults = {"DJUST_ERRORS_DSN": self.DSN}
+        defaults = {"DJUST_MONITOR_DSN": self.DSN}
         defaults.update(setting_overrides)
         with override_settings(**defaults):
-            return DjustErrorsMiddleware(lambda r: None)
+            return DjustMonitorMiddleware(lambda r: None)
 
     def test_injects_script_into_html(self):
         from django.test.utils import override_settings
         response = self._make_html_response()
-        with override_settings(DJUST_ERRORS_DSN=self.DSN):
-            mw = DjustErrorsMiddleware(lambda r: response)
+        with override_settings(DJUST_MONITOR_DSN=self.DSN):
+            mw = DjustMonitorMiddleware(lambda r: response)
             request = MagicMock()
             request.path = "/test/"
             result = mw(request)
@@ -175,10 +186,10 @@ class TestJsCaptureInjection:
         from django.test.utils import override_settings
         response = self._make_html_response()
         with override_settings(
-            DJUST_ERRORS_DSN=self.DSN,
-            DJUST_ERRORS_ENVIRONMENT="staging",
+            DJUST_MONITOR_DSN=self.DSN,
+            DJUST_MONITOR_ENVIRONMENT="staging",
         ):
-            mw = DjustErrorsMiddleware(lambda r: response)
+            mw = DjustMonitorMiddleware(lambda r: response)
             request = MagicMock()
             request.path = "/test/"
             result = mw(request)
@@ -189,8 +200,8 @@ class TestJsCaptureInjection:
     def test_default_environment_is_production(self):
         from django.test.utils import override_settings
         response = self._make_html_response()
-        with override_settings(DJUST_ERRORS_DSN=self.DSN):
-            mw = DjustErrorsMiddleware(lambda r: response)
+        with override_settings(DJUST_MONITOR_DSN=self.DSN):
+            mw = DjustMonitorMiddleware(lambda r: response)
             request = MagicMock()
             request.path = "/test/"
             result = mw(request)
@@ -202,10 +213,10 @@ class TestJsCaptureInjection:
         from django.test.utils import override_settings
         response = self._make_html_response()
         with override_settings(
-            DJUST_ERRORS_DSN=self.DSN,
-            DJUST_ERRORS_JS_CAPTURE=False,
+            DJUST_MONITOR_DSN=self.DSN,
+            DJUST_MONITOR_JS_CAPTURE=False,
         ):
-            mw = DjustErrorsMiddleware(lambda r: response)
+            mw = DjustMonitorMiddleware(lambda r: response)
             request = MagicMock()
             request.path = "/test/"
             result = mw(request)
@@ -216,8 +227,8 @@ class TestJsCaptureInjection:
     def test_no_injection_without_dsn(self):
         from django.test.utils import override_settings
         response = self._make_html_response()
-        with override_settings(DJUST_ERRORS_DSN=""):
-            mw = DjustErrorsMiddleware(lambda r: response)
+        with override_settings(DJUST_MONITOR_DSN=""):
+            mw = DjustMonitorMiddleware(lambda r: response)
             request = MagicMock()
             request.path = "/test/"
             result = mw(request)
@@ -229,8 +240,8 @@ class TestJsCaptureInjection:
         from django.http import JsonResponse
         from django.test.utils import override_settings
         response = JsonResponse({"ok": True})
-        with override_settings(DJUST_ERRORS_DSN=self.DSN):
-            mw = DjustErrorsMiddleware(lambda r: response)
+        with override_settings(DJUST_MONITOR_DSN=self.DSN):
+            mw = DjustMonitorMiddleware(lambda r: response)
             request = MagicMock()
             request.path = "/test/"
             result = mw(request)
@@ -243,8 +254,8 @@ class TestJsCaptureInjection:
         # Simulate a page that already has the script (e.g., via template tag)
         html = '<html><body><script data-djust-errors>existing</script></body></html>'
         response = self._make_html_response(html)
-        with override_settings(DJUST_ERRORS_DSN=self.DSN):
-            mw = DjustErrorsMiddleware(lambda r: response)
+        with override_settings(DJUST_MONITOR_DSN=self.DSN):
+            mw = DjustMonitorMiddleware(lambda r: response)
             request = MagicMock()
             request.path = "/test/"
             result = mw(request)
@@ -255,8 +266,8 @@ class TestJsCaptureInjection:
     def test_no_injection_without_body_tag(self):
         from django.test.utils import override_settings
         response = self._make_html_response("<html><h1>Fragment</h1></html>")
-        with override_settings(DJUST_ERRORS_DSN=self.DSN):
-            mw = DjustErrorsMiddleware(lambda r: response)
+        with override_settings(DJUST_MONITOR_DSN=self.DSN):
+            mw = DjustMonitorMiddleware(lambda r: response)
             request = MagicMock()
             request.path = "/test/"
             result = mw(request)
@@ -267,8 +278,8 @@ class TestJsCaptureInjection:
     def test_updates_content_length(self):
         from django.test.utils import override_settings
         response = self._make_html_response()
-        with override_settings(DJUST_ERRORS_DSN=self.DSN):
-            mw = DjustErrorsMiddleware(lambda r: response)
+        with override_settings(DJUST_MONITOR_DSN=self.DSN):
+            mw = DjustMonitorMiddleware(lambda r: response)
             request = MagicMock()
             request.path = "/test/"
             result = mw(request)
@@ -279,24 +290,24 @@ class TestJsCaptureInjection:
 
 class TestBuildScriptTag:
     def test_contains_dsn(self):
-        from djust_errors_client._js_capture import build_script_tag
+        from djust_monitor._js_capture import build_script_tag
         tag = build_script_tag("https://key@host/api/")
         assert 'var _djeDsn="https://key@host/api/"' in tag
         assert 'data-djust-errors' in tag
 
     def test_contains_environment(self):
-        from djust_errors_client._js_capture import build_script_tag
+        from djust_monitor._js_capture import build_script_tag
         tag = build_script_tag("https://key@host/api/", "staging")
         assert '_djeEnv="staging"' in tag
 
     def test_contains_iife(self):
-        from djust_errors_client._js_capture import build_script_tag
+        from djust_monitor._js_capture import build_script_tag
         tag = build_script_tag("https://key@host/api/")
         assert "(function(){" in tag
         assert "})();" in tag
 
     def test_wraps_in_script_tag(self):
-        from djust_errors_client._js_capture import build_script_tag
+        from djust_monitor._js_capture import build_script_tag
         tag = build_script_tag("https://key@host/api/")
         assert tag.startswith("<script data-djust-errors>")
         assert tag.endswith("</script>")

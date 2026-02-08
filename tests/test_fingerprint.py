@@ -1,4 +1,4 @@
-from djust_errors_client.fingerprint import (
+from djust_monitor.fingerprint import (
     _normalize_message,
     compute_fingerprint,
 )

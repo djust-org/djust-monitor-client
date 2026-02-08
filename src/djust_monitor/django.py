@@ -6,53 +6,70 @@ from django.conf import settings
 from django.utils import timezone
 
 
-class DjustErrorsConfig(AppConfig):
-    name = "djust_errors_client"
-    verbose_name = "Djust Errors"
+def _setting(new_name, old_name, default=None):
+    """Read a setting by new name, falling back to old name for backwards compat."""
+    val = getattr(settings, new_name, None)
+    if val is not None:
+        return val
+    return getattr(settings, old_name, default)
+
+
+class DjustMonitorConfig(AppConfig):
+    name = "djust_monitor"
+    verbose_name = "Djust Monitor"
     default_auto_field = "django.db.models.BigAutoField"
 
     def ready(self):
-        dsn = getattr(settings, "DJUST_ERRORS_DSN", None)
+        dsn = _setting("DJUST_MONITOR_DSN", "DJUST_ERRORS_DSN")
         if dsn:
-            import djust_errors_client
+            import djust_monitor
 
             kwargs = {}
-            env = getattr(settings, "DJUST_ERRORS_ENVIRONMENT", None)
+            env = _setting("DJUST_MONITOR_ENVIRONMENT", "DJUST_ERRORS_ENVIRONMENT")
             if env:
                 kwargs["environment"] = env
-            release = getattr(settings, "DJUST_ERRORS_RELEASE", None)
+            release = _setting("DJUST_MONITOR_RELEASE", "DJUST_ERRORS_RELEASE")
             if release:
                 kwargs["release"] = release
-            sample_rate = getattr(settings, "DJUST_ERRORS_SAMPLE_RATE", None)
+            sample_rate = _setting("DJUST_MONITOR_SAMPLE_RATE", "DJUST_ERRORS_SAMPLE_RATE")
             if sample_rate is not None:
                 kwargs["sample_rate"] = sample_rate
-            djust_errors_client.init(dsn, **kwargs)
+            djust_monitor.init(dsn, **kwargs)
 
+
+# Keep old name as alias for backwards compatibility
+DjustErrorsConfig = DjustMonitorConfig
 
 _DEFAULT_IGNORE_PATHS = ["/static/", "/favicon.ico"]
 
 
-class DjustErrorsMiddleware:
+class DjustMonitorMiddleware:
     """Django middleware that captures unhandled exceptions and request metrics."""
 
     def __init__(self, get_response):
         self.get_response = get_response
-        self.metrics_enabled = getattr(
-            settings, "DJUST_ERRORS_METRICS_ENABLED", True
+        self.metrics_enabled = _setting(
+            "DJUST_MONITOR_METRICS_ENABLED", "DJUST_ERRORS_METRICS_ENABLED", True
         )
-        self.ignore_paths = getattr(
-            settings, "DJUST_ERRORS_METRICS_IGNORE_PATHS", _DEFAULT_IGNORE_PATHS
+        self.ignore_paths = _setting(
+            "DJUST_MONITOR_METRICS_IGNORE_PATHS",
+            "DJUST_ERRORS_METRICS_IGNORE_PATHS",
+            _DEFAULT_IGNORE_PATHS,
         )
 
         # JS error capture auto-injection
-        self._js_capture = getattr(settings, "DJUST_ERRORS_JS_CAPTURE", True)
-        self._dsn = getattr(settings, "DJUST_ERRORS_DSN", "")
-        self._environment = getattr(
-            settings, "DJUST_ERRORS_ENVIRONMENT", "production"
+        self._js_capture = _setting(
+            "DJUST_MONITOR_JS_CAPTURE", "DJUST_ERRORS_JS_CAPTURE", True
+        )
+        self._dsn = _setting("DJUST_MONITOR_DSN", "DJUST_ERRORS_DSN", "")
+        self._environment = _setting(
+            "DJUST_MONITOR_ENVIRONMENT", "DJUST_ERRORS_ENVIRONMENT", "production"
         )
 
         # Cache all capture flags once at init — no per-request settings lookups
-        cfg = getattr(settings, "DJUST_ERRORS_METRICS_CAPTURE", {})
+        cfg = _setting(
+            "DJUST_MONITOR_METRICS_CAPTURE", "DJUST_ERRORS_METRICS_CAPTURE", {}
+        )
         self._cap_referrer = cfg.get("referrer", True)
         self._cap_ip = cfg.get("ip_address", True)
         self._cap_user = cfg.get("user_id", True)
@@ -68,8 +85,8 @@ class DjustErrorsMiddleware:
         self._hostname = socket.gethostname() if self._cap_hostname else ""
 
         # Eagerly import modules used in __call__
-        import djust_errors_client as _dec
-        self._client = _dec
+        import djust_monitor as _dm
+        self._client = _dm
         if self._cap_db:
             from django.db import connection as _conn
             self._connection = _conn
@@ -190,11 +207,15 @@ class DjustErrorsMiddleware:
         return any(path.startswith(prefix) for prefix in self.ignore_paths)
 
     def process_exception(self, request, exception):
-        import djust_errors_client
+        import djust_monitor
 
         context = _build_request_context(request)
-        djust_errors_client.capture_exception(exception, context=context)
+        djust_monitor.capture_exception(exception, context=context)
         return None
+
+
+# Keep old name as alias for backwards compatibility
+DjustErrorsMiddleware = DjustMonitorMiddleware
 
 
 def _build_request_context(request) -> dict:

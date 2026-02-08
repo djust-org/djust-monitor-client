@@ -1,10 +1,10 @@
 import random
 import threading
 
-from djust_errors_client.fingerprint import compute_fingerprint
-from djust_errors_client.scrubber import scrub
-from djust_errors_client.serializer import serialize_exception
-from djust_errors_client.transport import Transport
+from djust_monitor.fingerprint import compute_fingerprint
+from djust_monitor.scrubber import scrub
+from djust_monitor.serializer import serialize_exception
+from djust_monitor.transport import Transport
 
 
 class DjustErrorsClient:

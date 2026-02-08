@@ -1,4 +1,4 @@
-from djust_errors_client.scrubber import FILTERED, scrub
+from djust_monitor.scrubber import FILTERED, scrub
 
 
 class TestScrubber:

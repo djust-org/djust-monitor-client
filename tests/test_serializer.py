@@ -1,6 +1,6 @@
 import sys
 
-from djust_errors_client.serializer import serialize_exception
+from djust_monitor.serializer import serialize_exception
 
 
 def _make_exception():

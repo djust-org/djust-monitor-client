@@ -66,5 +66,5 @@ class Transport:
                 if attempt == 0:
                     continue
             except Exception:
-                logger.debug("djust-errors: transport error", exc_info=True)
+                logger.debug("djust-monitor: transport error", exc_info=True)
                 return

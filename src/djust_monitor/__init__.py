@@ -1,4 +1,4 @@
-from djust_errors_client.client import DjustErrorsClient
+from djust_monitor.client import DjustErrorsClient
 
 VERSION = "0.1.0"
 
