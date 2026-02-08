@@ -192,7 +192,7 @@ class DjustMonitorMiddleware:
             content_type = response.get("Content-Type", "")
             if "text/html" in content_type:
                 body = response.content.decode(response.charset)
-                if "</body>" in body and "data-djust-errors" not in body:
+                if "</body>" in body and "data-djust-monitor" not in body:
                     from ._js_capture import build_script_tag
 
                     tag = build_script_tag(self._dsn, self._environment)

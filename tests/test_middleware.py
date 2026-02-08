@@ -178,7 +178,7 @@ class TestJsCaptureInjection:
             result = mw(request)
 
         body = result.content.decode()
-        assert "data-djust-errors" in body
+        assert "data-djust-monitor" in body
         assert '_djeDsn="https://testkey123@errors.example.com/api/reports/"' in body
         assert body.endswith("</body></html>")
 
@@ -222,7 +222,7 @@ class TestJsCaptureInjection:
             result = mw(request)
 
         body = result.content.decode()
-        assert "data-djust-errors" not in body
+        assert "data-djust-monitor" not in body
 
     def test_no_injection_without_dsn(self):
         from django.test.utils import override_settings
@@ -234,7 +234,7 @@ class TestJsCaptureInjection:
             result = mw(request)
 
         body = result.content.decode()
-        assert "data-djust-errors" not in body
+        assert "data-djust-monitor" not in body
 
     def test_no_injection_for_json_response(self):
         from django.http import JsonResponse
@@ -247,12 +247,12 @@ class TestJsCaptureInjection:
             result = mw(request)
 
         body = result.content.decode()
-        assert "data-djust-errors" not in body
+        assert "data-djust-monitor" not in body
 
     def test_no_double_injection(self):
         from django.test.utils import override_settings
         # Simulate a page that already has the script (e.g., via template tag)
-        html = '<html><body><script data-djust-errors>existing</script></body></html>'
+        html = '<html><body><script data-djust-monitor>existing</script></body></html>'
         response = self._make_html_response(html)
         with override_settings(DJUST_MONITOR_DSN=self.DSN):
             mw = DjustMonitorMiddleware(lambda r: response)
@@ -261,7 +261,7 @@ class TestJsCaptureInjection:
             result = mw(request)
 
         body = result.content.decode()
-        assert body.count("data-djust-errors") == 1
+        assert body.count("data-djust-monitor") == 1
 
     def test_no_injection_without_body_tag(self):
         from django.test.utils import override_settings
@@ -273,7 +273,7 @@ class TestJsCaptureInjection:
             result = mw(request)
 
         body = result.content.decode()
-        assert "data-djust-errors" not in body
+        assert "data-djust-monitor" not in body
 
     def test_updates_content_length(self):
         from django.test.utils import override_settings
@@ -284,7 +284,7 @@ class TestJsCaptureInjection:
             request.path = "/test/"
             result = mw(request)
 
-        assert "data-djust-errors" in result.content.decode()
+        assert "data-djust-monitor" in result.content.decode()
         assert int(result["Content-Length"]) == len(result.content)
 
 
@@ -293,7 +293,7 @@ class TestBuildScriptTag:
         from djust_monitor._js_capture import build_script_tag
         tag = build_script_tag("https://key@host/api/")
         assert 'var _djeDsn="https://key@host/api/"' in tag
-        assert 'data-djust-errors' in tag
+        assert 'data-djust-monitor' in tag
 
     def test_contains_environment(self):
         from djust_monitor._js_capture import build_script_tag
@@ -309,5 +309,5 @@ class TestBuildScriptTag:
     def test_wraps_in_script_tag(self):
         from djust_monitor._js_capture import build_script_tag
         tag = build_script_tag("https://key@host/api/")
-        assert tag.startswith("<script data-djust-errors>")
+        assert tag.startswith("<script data-djust-monitor>")
         assert tag.endswith("</script>")

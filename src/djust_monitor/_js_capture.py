@@ -9,7 +9,7 @@ _JS_SOURCE = r"""(function(){"use strict";try{var dsn=(typeof _djeDsn!=="undefin
 def build_script_tag(dsn: str, environment: str = "production") -> str:
     """Return an inline <script> tag with JS error capture and DSN baked in."""
     return (
-        '<script data-djust-errors>'
+        '<script data-djust-monitor>'
         'var _djeDsn="{}",_djeEnv="{}";{}'
         "</script>"
     ).format(dsn, environment, _JS_SOURCE)
