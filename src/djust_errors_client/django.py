@@ -44,6 +44,13 @@ class DjustErrorsMiddleware:
             settings, "DJUST_ERRORS_METRICS_IGNORE_PATHS", _DEFAULT_IGNORE_PATHS
         )
 
+        # JS error capture auto-injection
+        self._js_capture = getattr(settings, "DJUST_ERRORS_JS_CAPTURE", True)
+        self._dsn = getattr(settings, "DJUST_ERRORS_DSN", "")
+        self._environment = getattr(
+            settings, "DJUST_ERRORS_ENVIRONMENT", "production"
+        )
+
         # Cache all capture flags once at init — no per-request settings lookups
         cfg = getattr(settings, "DJUST_ERRORS_METRICS_CAPTURE", {})
         self._cap_referrer = cfg.get("referrer", True)
@@ -162,6 +169,20 @@ class DjustErrorsMiddleware:
             metric["vdom_time_ms"] = djust_timing.get("vdom_ms")
 
         self._client.record_metric(metric)
+
+        # Auto-inject JS error capture into HTML responses
+        if self._js_capture and self._dsn and hasattr(response, "content"):
+            content_type = response.get("Content-Type", "")
+            if "text/html" in content_type:
+                body = response.content.decode(response.charset)
+                if "</body>" in body and "data-djust-errors" not in body:
+                    from ._js_capture import build_script_tag
+
+                    tag = build_script_tag(self._dsn, self._environment)
+                    response.content = body.replace(
+                        "</body>", tag + "</body>"
+                    ).encode(response.charset)
+                    response["Content-Length"] = len(response.content)
 
         return response
 
