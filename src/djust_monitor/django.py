@@ -50,6 +50,9 @@ def _on_full_html_update(sender, **kwargs):
     previous_html_size = kwargs.get("previous_html_size")
     patch_count = kwargs.get("patch_count")
     version = kwargs.get("version", 0)
+    context_snapshot = kwargs.get("context_snapshot")
+    html_snippet = kwargs.get("html_snippet")
+    previous_html_snippet = kwargs.get("previous_html_snippet")
 
     # Build size delta string
     if previous_html_size is not None:
@@ -113,20 +116,25 @@ def _on_full_html_update(sender, **kwargs):
         f"v{version}, {size_info}). {explanation}"
     )
 
-    djust_monitor.capture_event(
-        event_type,
-        message,
-        context={
-            "error_code": error_code,
-            "view_name": view_name,
-            "event_name": event_name,
-            "reason": reason,
-            "html_size": html_size,
-            "previous_html_size": previous_html_size,
-            "patch_count": patch_count,
-            "vdom_version": version,
-        },
-    )
+    ctx = {
+        "error_code": error_code,
+        "view_name": view_name,
+        "event_name": event_name,
+        "reason": reason,
+        "html_size": html_size,
+        "previous_html_size": previous_html_size,
+        "patch_count": patch_count,
+        "vdom_version": version,
+    }
+    # Include diagnostic fields when present (DJE-053 no_change / no_patches)
+    if context_snapshot is not None:
+        ctx["context_snapshot"] = context_snapshot
+    if html_snippet:
+        ctx["html_snippet"] = html_snippet
+    if previous_html_snippet:
+        ctx["previous_html_snippet"] = previous_html_snippet
+
+    djust_monitor.capture_event(event_type, message, context=ctx)
 
 
 _PROXY_PATH = "/_djust_monitor/reports/"
