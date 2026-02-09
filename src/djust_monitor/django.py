@@ -101,7 +101,12 @@ def _on_full_html_update(sender, **kwargs):
     if error_code is None:
         return
 
-    event_type = error_code  # e.g. "DJE-053"
+    # Error titles for display (matches seed_errors catalog)
+    _ERROR_TITLES = {
+        "DJE-053": "Full HTML update — state outside VDOM root",
+    }
+    title = _ERROR_TITLES.get(error_code, "Full HTML update")
+    event_type = f"{error_code}: {title}"
 
     message = (
         f"Full HTML update on {view_name} (event: {event_name}, "
