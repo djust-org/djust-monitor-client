@@ -59,39 +59,49 @@ def _on_full_html_update(sender, **kwargs):
     else:
         size_info = f"{html_size:,}B"
 
+    # Map reasons to DJE error codes and explanations
     reasons = {
         "first_render": (
+            None,  # Normal operation, not an error
             "First render (mount) — no previous VDOM exists to diff against. "
             "This is normal and expected for the initial page load."
         ),
         "no_patches": (
+            "DJE-053",
             "The Rust VDOM engine diffed the previous and current render but "
-            "produced no patches. This means the template structure changed "
-            "significantly (e.g. {% if %} blocks toggling large sections, "
-            "{% for %} loops changing length, or dynamic template switching)."
+            "produced no patches. The template structure likely changed "
+            "significantly. See: https://djust.org/errors/DJE-053"
         ),
         "component_event": (
+            None,  # Known limitation, not actionable
             "Component events use a separate VDOM from the parent view. "
-            "Per-component VDOM tracking is not yet implemented, so the "
-            "full parent HTML is sent instead of patches."
+            "Per-component VDOM tracking is not yet implemented."
         ),
         "embedded_child": (
+            None,  # By design
             "Embedded child views always receive full HTML because they "
             "render independently from the parent's VDOM tree."
         ),
         "patch_compression": (
+            None,  # Optimization, not an error
             f"The VDOM engine generated {patch_count} patches, but the full "
             f"HTML was >30% smaller than the patch payload. "
             "Sending HTML instead for better network performance."
         ),
         "no_change": (
-            "The VDOM engine diffed the previous and current render and found "
-            "zero differences. The event handler likely modified state that is "
-            "outside the <div data-djust-root> boundary. Consider using "
-            "push_event for client-side-only state changes."
+            "DJE-053",
+            "The event handler modified state outside the <div data-djust-root> "
+            "boundary. Consider using push_event with _skip_render = True. "
+            "See: https://djust.org/errors/DJE-053"
         ),
     }
-    explanation = reasons.get(reason, f"Unknown reason: {reason}")
+    error_code, explanation = reasons.get(reason, (None, f"Unknown reason: {reason}"))
+
+    # Skip reporting non-actionable events (first_render, component_event, etc.)
+    if error_code is None:
+        return
+
+    event_type = error_code  # e.g. "DJE-053"
 
     message = (
         f"Full HTML update on {view_name} (event: {event_name}, "
@@ -99,9 +109,10 @@ def _on_full_html_update(sender, **kwargs):
     )
 
     djust_monitor.capture_event(
-        "FullHTMLUpdate",
+        event_type,
         message,
         context={
+            "error_code": error_code,
             "view_name": view_name,
             "event_name": event_name,
             "reason": reason,
