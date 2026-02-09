@@ -34,7 +34,7 @@ def _build_dsn(raw_dsn):
         return raw_dsn
 
     # Plain API key — build URL from host setting
-    host = _setting("DJUST_MONITOR_HOST", "DJUST_ERRORS_HOST", "http://localhost:8085")
+    host = _setting("DJUST_MONITOR_HOST", "DJUST_ERRORS_HOST", "https://monitor.djust.org")
     host = host.rstrip("/")
     return f"{host.replace('://', f'://{raw_dsn}@')}/api/reports/"
 
