@@ -4,7 +4,7 @@ VERSION = "0.1.0"
 
 # Re-export for convenient imports:
 #   INSTALLED_APPS = ["djust_monitor"]           (auto-discovers apps.py on Django 3.2+)
-#   MIDDLEWARE = ["djust_monitor.DjustMonitorMiddleware"]
+#   MIDDLEWARE = ["djust_monitor.django.DjustMonitorMiddleware"]
 from djust_monitor.django import DjustMonitorMiddleware  # noqa: F401
 
 # Django <3.2 fallback (harmless no-op on 3.2+)
