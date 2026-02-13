@@ -1,4 +1,5 @@
 from djust_monitor.client import DjustErrorsClient
+from djust_monitor.logging_handler import BatchingHTTPHandler  # noqa: F401
 
 VERSION = "0.1.0"
 

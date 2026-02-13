@@ -32,6 +32,7 @@ class Transport:
         self.timeout = timeout
         # Derive metrics endpoint from reports endpoint
         self.metrics_endpoint = self.endpoint.replace("/api/reports/", "/api/metrics/")
+        self.logs_endpoint = self.endpoint.replace("/api/reports/", "/api/logs/")
 
     def send(self, payload: dict) -> None:
         """Send payload in a background thread (non-blocking)."""
@@ -45,6 +46,38 @@ class Transport:
             target=self._do_send, args=(self.metrics_endpoint, payload), daemon=True
         )
         t.start()
+
+    def send_logs(self, batch: list[dict]) -> bool:
+        """Send log batch synchronously. Returns True on success.
+
+        Called from the handler's background timer thread, so no need
+        for another background thread.
+        """
+        payload = {"logs": batch}
+        return self._do_send_sync(self.logs_endpoint, payload)
+
+    def _do_send_sync(self, url: str, payload: dict) -> bool:
+        """POST the payload synchronously with one retry on 5xx. Returns success."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        for attempt in range(2):
+            try:
+                resp = requests.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout,
+                )
+                if resp.status_code < 500:
+                    return True
+                if attempt == 0:
+                    continue
+            except Exception:
+                logger.debug("djust-monitor: transport error", exc_info=True)
+                return False
+        return False
 
     def _do_send(self, url: str, payload: dict) -> None:
         """POST the payload with one retry on 5xx."""
