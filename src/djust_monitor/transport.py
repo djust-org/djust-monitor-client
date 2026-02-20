@@ -1,3 +1,4 @@
+import json
 import logging
 import threading
 from urllib.parse import urlparse
@@ -24,6 +25,26 @@ def parse_dsn(dsn: str) -> tuple[str, str]:
     return endpoint, api_key
 
 
+def _safe_serialize(payload: dict) -> str:
+    """Serialize payload to a JSON string, falling back gracefully on errors.
+
+    If the payload contains non-serializable values (Django model instances,
+    exceptions with circular __context__ references, etc.), those values are
+    replaced with their str() representation so the report is never silently
+    dropped.
+    """
+    def _default(obj):
+        return str(obj)
+
+    try:
+        return json.dumps(payload, default=_default)
+    except (TypeError, ValueError, RecursionError) as exc:
+        # Last-resort: represent the whole payload as a string so we at least
+        # send something meaningful rather than dropping the event.
+        logger.debug("djust-monitor: payload serialization fallback: %s", exc)
+        return json.dumps({"_serialization_error": str(exc), "raw": str(payload)})
+
+
 class Transport:
     """Fire-and-forget HTTP transport. Sends payloads in background threads."""
 
@@ -33,11 +54,43 @@ class Transport:
         # Derive metrics endpoint from reports endpoint
         self.metrics_endpoint = self.endpoint.replace("/api/reports/", "/api/metrics/")
         self.logs_endpoint = self.endpoint.replace("/api/reports/", "/api/logs/")
+        # Track in-flight exception threads so flush_exceptions() can join them
+        self._inflight_lock = threading.Lock()
+        self._inflight_threads: list[threading.Thread] = []
 
     def send(self, payload: dict) -> None:
         """Send payload in a background thread (non-blocking)."""
-        t = threading.Thread(target=self._do_send, args=(self.endpoint, payload), daemon=True)
+        t = threading.Thread(target=self._tracked_send, args=(payload,), daemon=True)
+        with self._inflight_lock:
+            self._inflight_threads.append(t)
         t.start()
+
+    def send_sync(self, payload: dict) -> bool:
+        """Send payload synchronously. Returns True on success.
+
+        Use for critical events (e.g. pipeline failures) where confirmation
+        is needed before proceeding.
+        """
+        return self._do_send_sync(self.endpoint, payload)
+
+    def flush_exceptions(self, timeout: float = 5.0) -> None:
+        """Block until all in-flight exception transport threads finish (or timeout)."""
+        with self._inflight_lock:
+            threads = list(self._inflight_threads)
+        for t in threads:
+            t.join(timeout=timeout)
+
+    def _tracked_send(self, payload: dict) -> None:
+        """Wrapper that removes thread from inflight list after completion."""
+        try:
+            self._do_send(self.endpoint, payload)
+        finally:
+            current = threading.current_thread()
+            with self._inflight_lock:
+                try:
+                    self._inflight_threads.remove(current)
+                except ValueError:
+                    pass
 
     def send_metrics(self, batch: list[dict]) -> None:
         """Send a batch of metrics in a background thread (non-blocking)."""
@@ -62,11 +115,12 @@ class Transport:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        body = _safe_serialize(payload)
         for attempt in range(2):
             try:
                 resp = requests.post(
                     url,
-                    json=payload,
+                    data=body,
                     headers=headers,
                     timeout=self.timeout,
                 )
@@ -85,11 +139,12 @@ class Transport:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        body = _safe_serialize(payload)
         for attempt in range(2):
             try:
                 resp = requests.post(
                     url,
-                    json=payload,
+                    data=body,
                     headers=headers,
                     timeout=self.timeout,
                 )

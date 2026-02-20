@@ -194,6 +194,13 @@ class DjustMonitorMiddleware:
         # Cache expensive one-time values
         self._hostname = socket.gethostname() if self._cap_hostname else ""
 
+        # Circuit breaker for the JS error proxy (_proxy_report / _forward)
+        self._proxy_failures = 0
+        self._proxy_backoff_until = 0.0
+        self._proxy_max_failures = 5
+        self._proxy_max_backoff = 60.0
+        self._proxy_lock = threading.Lock()
+
         # Eagerly import modules used in __call__
         import djust_monitor as _dm
         self._client = _dm
@@ -335,6 +342,21 @@ class DjustMonitorMiddleware:
         endpoint = self._proxy_endpoint
         api_key = self._proxy_api_key
 
+        # Check circuit breaker before spawning a thread
+        now = time.monotonic()
+        with self._proxy_lock:
+            if (
+                self._proxy_failures >= self._proxy_max_failures
+                and now < self._proxy_backoff_until
+            ):
+                remaining = self._proxy_backoff_until - now
+                logger.debug(
+                    "djust-monitor: proxy circuit open, dropping JS report "
+                    "(backoff %.0fs remaining)",
+                    remaining,
+                )
+                return JsonResponse({"status": "accepted"}, status=202)
+
         def _forward():
             try:
                 _requests.post(
@@ -346,8 +368,14 @@ class DjustMonitorMiddleware:
                     },
                     timeout=5.0,
                 )
+                with self._proxy_lock:
+                    self._proxy_failures = 0
             except Exception:
                 logger.debug("djust-monitor: proxy forward failed", exc_info=True)
+                with self._proxy_lock:
+                    self._proxy_failures += 1
+                    backoff = min(2 ** self._proxy_failures, self._proxy_max_backoff)
+                    self._proxy_backoff_until = time.monotonic() + backoff
 
         threading.Thread(target=_forward, daemon=True).start()
         return JsonResponse({"status": "accepted"}, status=202)
