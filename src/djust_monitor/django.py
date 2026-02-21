@@ -137,6 +137,25 @@ def _on_full_html_update(sender, **kwargs):
     djust_monitor.capture_event(event_type, message, context=ctx)
 
 
+def _on_liveview_server_error(sender, **kwargs):
+    """Handle djust's liveview_server_error signal — forward to monitor."""
+    import djust_monitor
+
+    error = kwargs.get("error", "Unknown LiveView error")
+    view_name = kwargs.get("view_name", "unknown")
+    context = kwargs.get("context", {})
+
+    djust_monitor.capture_event(
+        "LiveViewServerError",
+        error,
+        context={
+            "view": view_name,
+            "source": "websocket",
+            **context,
+        },
+    )
+
+
 _PROXY_PATH = "/_djust_monitor/reports/"
 _DEFAULT_IGNORE_PATHS = ["/static/", "/favicon.ico", "/_djust_monitor/"]
 
