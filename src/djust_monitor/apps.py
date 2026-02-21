@@ -59,3 +59,12 @@ class DjustMonitorConfig(AppConfig):
             logger.debug("djust-monitor: connected to full_html_update signal")
         except ImportError:
             pass  # djust not installed — signal not available
+
+        try:
+            from djust.signals import liveview_server_error
+            from djust_monitor.django import _on_liveview_server_error
+
+            liveview_server_error.connect(_on_liveview_server_error)
+            logger.debug("djust-monitor: connected to liveview_server_error signal")
+        except ImportError:
+            pass

@@ -21,11 +21,41 @@ def init(dsn: str, **kwargs) -> DjustErrorsClient:
     return _client
 
 
-def capture_exception(exc: BaseException, context: dict | None = None) -> str | None:
-    """Capture an exception and send it to the server. Returns the fingerprint."""
+def capture_exception(
+    exc: BaseException,
+    context: dict | None = None,
+    send_sync: bool = False,
+) -> str | None:
+    """Capture an exception and send it to the server.
+
+    Args:
+        exc: The exception to capture.
+        context: Optional request/user context dict.
+        send_sync: When True, block until HTTP delivery completes before
+            returning. Use for critical events (e.g. pipeline failures)
+            where you need confirmation before proceeding. Default False.
+
+    Returns:
+        The fingerprint string, or None if client is uninitialised or sampled out.
+    """
     if _client is None:
         return None
-    return _client.capture(exc, context=context)
+    return _client.capture(exc, context=context, send_sync=send_sync)
+
+
+def flush_exceptions(timeout: float = 5.0) -> None:
+    """Wait for all in-flight exception transport threads to complete.
+
+    Blocks until every background exception send thread has finished
+    (or the per-thread timeout elapses). Use at shutdown or before a
+    process restart to avoid losing in-flight reports.
+
+    Args:
+        timeout: Maximum seconds to wait per thread. Default 5.0.
+    """
+    if _client is None:
+        return
+    _client.flush_exceptions(timeout=timeout)
 
 
 def record_metric(metric: dict) -> None:

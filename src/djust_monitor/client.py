@@ -19,6 +19,8 @@ class DjustErrorsClient:
         metrics_batch_size: int = 50,
         metrics_flush_interval: float = 60.0,
     ):
+        if not (0.0 <= sample_rate <= 1.0):
+            raise ValueError(f"sample_rate must be between 0.0 and 1.0, got {sample_rate!r}")
         self.transport = Transport(dsn)
         self.environment = environment
         self.release = release
@@ -48,8 +50,24 @@ class DjustErrorsClient:
         self.flush_metrics()
         self._start_flush_timer()
 
-    def capture(self, exc: BaseException, context: dict | None = None) -> str | None:
-        """Serialize, fingerprint, scrub, and send an exception report."""
+    def capture(
+        self,
+        exc: BaseException,
+        context: dict | None = None,
+        send_sync: bool = False,
+    ) -> str | None:
+        """Serialize, fingerprint, scrub, and send an exception report.
+
+        Args:
+            exc: The exception to capture.
+            context: Optional request/user context dict.
+            send_sync: When True, block until the HTTP send completes before
+                returning. Use for critical events (e.g. pipeline failures)
+                where confirmation of delivery is required. Default False.
+
+        Returns:
+            The fingerprint string, or None if sampled out.
+        """
         if self.sample_rate < 1.0 and random.random() > self.sample_rate:
             return None
 
@@ -62,8 +80,19 @@ class DjustErrorsClient:
         fingerprint = compute_fingerprint(payload)
         payload["fingerprint"] = fingerprint
         scrub(payload)
-        self.transport.send(payload)
+        if send_sync:
+            self.transport.send_sync(payload)
+        else:
+            self.transport.send(payload)
         return fingerprint
+
+    def flush_exceptions(self, timeout: float = 5.0) -> None:
+        """Block until all in-flight exception sends complete (or timeout).
+
+        Args:
+            timeout: Maximum seconds to wait per thread. Default 5.0.
+        """
+        self.transport.flush_exceptions(timeout=timeout)
 
     def capture_event(
         self,

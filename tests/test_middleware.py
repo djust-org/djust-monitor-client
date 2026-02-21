@@ -14,8 +14,8 @@ if not settings.configured:
     django.setup()
 
 import djust_monitor
+from djust_monitor.apps import DjustMonitorConfig
 from djust_monitor.django import (
-    DjustMonitorConfig,
     DjustMonitorMiddleware,
     _build_request_context,
 )
@@ -286,6 +286,126 @@ class TestJsCaptureInjection:
 
         assert "data-djust-monitor" in result.content.decode()
         assert int(result["Content-Length"]) == len(result.content)
+
+
+class TestProxyCircuitBreaker:
+    """Circuit breaker for _proxy_report / _forward."""
+
+    DSN = "https://testkey123@errors.example.com/api/reports/"
+
+    def _make_middleware(self):
+        from django.test.utils import override_settings
+        with override_settings(DJUST_MONITOR_DSN=self.DSN):
+            return DjustMonitorMiddleware(lambda r: None)
+
+    def _make_proxy_request(self, body=None):
+        request = MagicMock()
+        request.path = "/_djust_monitor/reports/"
+        request.method = "POST"
+        request.body = (body or b'{"error": "test"}')
+        return request
+
+    def test_proxy_accepted_normally(self):
+        mw = self._make_middleware()
+        request = self._make_proxy_request()
+        response = mw(request)
+        assert response.status_code == 202
+
+    def test_circuit_opens_after_max_failures(self):
+        import time
+        import threading
+        mw = self._make_middleware()
+        # Simulate 5 consecutive failures by setting state directly
+        with mw._proxy_lock:
+            mw._proxy_failures = 5
+            mw._proxy_backoff_until = time.monotonic() + 60.0
+
+        request = self._make_proxy_request()
+        threads_spawned = []
+        original_thread = threading.Thread
+        def tracking_thread(*args, **kwargs):
+            t = original_thread(*args, **kwargs)
+            threads_spawned.append(t)
+            return t
+
+        with patch("djust_monitor.django.threading.Thread", side_effect=tracking_thread):
+            response = mw(request)
+
+        # Circuit is open — no thread should have been spawned
+        assert len(threads_spawned) == 0
+        assert response.status_code == 202
+
+    def test_circuit_allows_retry_after_backoff_expires(self):
+        import time
+        mw = self._make_middleware()
+        # Circuit is open but backoff already expired
+        with mw._proxy_lock:
+            mw._proxy_failures = 5
+            mw._proxy_backoff_until = time.monotonic() - 1.0  # already past
+
+        request = self._make_proxy_request()
+        with patch("djust_monitor.django._requests") as mock_requests:
+            mock_requests.post.return_value = MagicMock(status_code=202)
+            mw._proxy_report(request)
+            import time as _time
+            _time.sleep(0.05)  # let daemon thread run
+
+    def test_failure_increments_counter_and_sets_backoff(self):
+        import time
+        import threading
+        mw = self._make_middleware()
+        assert mw._proxy_failures == 0
+
+        done = threading.Event()
+        original_lock_class = type(mw._proxy_lock)
+
+        with patch("djust_monitor.django._requests") as mock_requests:
+            def fail_and_signal(*args, **kwargs):
+                raise Exception("connection refused")
+            mock_requests.post.side_effect = fail_and_signal
+
+            # Patch Thread to track when our thread finishes
+            original_thread = threading.Thread
+            threads = []
+            def tracking_thread(*args, **kwargs):
+                t = original_thread(*args, **kwargs)
+                threads.append(t)
+                return t
+            with patch("djust_monitor.django.threading.Thread", side_effect=tracking_thread):
+                mw._proxy_report(self._make_proxy_request())
+
+        # Wait for the spawned thread to complete
+        for t in threads:
+            t.join(timeout=2.0)
+
+        assert mw._proxy_failures == 1
+        assert mw._proxy_backoff_until > time.monotonic()
+
+    def test_success_resets_failure_counter(self):
+        import time
+        import threading
+        mw = self._make_middleware()
+        # Start with some failures
+        with mw._proxy_lock:
+            mw._proxy_failures = 3
+            mw._proxy_backoff_until = time.monotonic() - 1.0
+
+        threads = []
+        original_thread = threading.Thread
+        def tracking_thread(*args, **kwargs):
+            t = original_thread(*args, **kwargs)
+            threads.append(t)
+            return t
+
+        with patch("djust_monitor.django._requests") as mock_requests:
+            mock_requests.post.return_value = MagicMock(status_code=202)
+            with patch("djust_monitor.django.threading.Thread", side_effect=tracking_thread):
+                mw._proxy_report(self._make_proxy_request())
+
+        for t in threads:
+            t.join(timeout=2.0)
+
+        assert mw._proxy_failures == 0
 
 
 class TestBuildScriptTag:
