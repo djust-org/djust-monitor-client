@@ -1,3 +1,4 @@
+import atexit
 import random
 import threading
 
@@ -26,6 +27,10 @@ class DjustErrorsClient:
         self.release = release
         self.sample_rate = sample_rate
         self._lock = threading.Lock()
+
+        # Flush in-flight exception sends on clean process exit so reports
+        # queued just before shutdown are not silently discarded.
+        atexit.register(self.flush_exceptions)
 
         # Metrics buffer
         self._metrics_batch_size = metrics_batch_size

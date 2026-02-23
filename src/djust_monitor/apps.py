@@ -1,11 +1,38 @@
 """Django AppConfig for djust-monitor — auto-discovered by Django 3.2+."""
 
 import logging
+import os
+import subprocess
 
 from django.apps import AppConfig
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_release() -> str:
+    """Auto-detect the current release version.
+
+    Priority:
+    1. DJUST_MONITOR_RELEASE environment variable
+    2. ``git describe --tags --always`` output
+    3. Empty string (silent failure)
+    """
+    env_val = os.environ.get("DJUST_MONITOR_RELEASE", "")
+    if env_val:
+        return env_val
+    try:
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--always"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return ""
 
 
 def _setting(new_name, old_name, default=None):
